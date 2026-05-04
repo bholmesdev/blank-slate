@@ -26,7 +26,7 @@ export type BulletedListElement = {
 
 export type ListItemElement = {
   type: 'list-item'
-  children: CustomText[]
+  children: Array<ParagraphElement | BulletedListElement>
 }
 
 export type CustomElement =

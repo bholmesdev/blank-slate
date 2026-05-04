@@ -3,10 +3,12 @@ import { toString } from 'mdast-util-to-string'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import type {
+  BulletedListElement,
   CustomElement,
   CustomText,
   HeadingElement,
   ListItemElement,
+  ParagraphElement,
   SlateDocument,
 } from './slate'
 
@@ -31,17 +33,16 @@ export function serializeMarkdown(value: SlateDocument): string {
   return value
     .map((node) => {
       if (node.type === 'bulleted-list') {
-        return node.children
-          .map((item) => `- ${item.children.map(serializeText).join('')}`)
-          .join('\n')
+        return serializeList(node.children)
       }
 
-      const text = node.children.map(serializeText).join('')
-
-      if (node.type === 'heading-one') return `# ${text}`
-      if (node.type === 'heading-two') return `## ${text}`
-      if (node.type === 'heading-three') return `### ${text}`
-      return escapeParagraphStart(text)
+      if (node.type === 'heading-one') return `# ${node.children.map(serializeText).join('')}`
+      if (node.type === 'heading-two') return `## ${node.children.map(serializeText).join('')}`
+      if (node.type === 'heading-three') return `### ${node.children.map(serializeText).join('')}`
+      if (node.type === 'paragraph') {
+        return escapeParagraphStart(node.children.map(serializeText).join(''))
+      }
+      return ''
     })
     .join('\n\n')
 }
@@ -89,18 +90,53 @@ function deserializeBlock(node: RootContent): CustomElement {
 
 function deserializeListItem(item: ListItem): ListItemElement {
   const [firstBlock] = item.children
+  const children: ListItemElement['children'] = [
+    {
+      type: 'paragraph',
+      children:
+        firstBlock?.type === 'paragraph'
+          ? deserializeInlineNodes(firstBlock.children)
+          : [{ text: firstBlock ? toString(firstBlock) : '' }],
+    },
+  ]
 
-  if (firstBlock?.type === 'paragraph') {
-    return {
-      type: 'list-item',
-      children: deserializeInlineNodes(firstBlock.children),
+  for (const block of item.children.slice(1)) {
+    if (block.type === 'list' && !block.ordered) {
+      children.push({
+        type: 'bulleted-list',
+        children: block.children.map(deserializeListItem),
+      })
     }
   }
 
-  return {
-    type: 'list-item',
-    children: [{ text: firstBlock ? toString(firstBlock) : '' }],
-  }
+  return { type: 'list-item', children }
+}
+
+function serializeList(items: readonly ListItemElement[], depth = 0): string {
+  const indent = '  '.repeat(depth)
+
+  return items
+    .map((item) => {
+      const text = itemParagraph(item).children.map(serializeText).join('')
+      const nestedText = nestedLists(item.children)
+        .map((list) => serializeList(list.children, depth + 1))
+        .join('\n')
+
+      return [`${indent}- ${text}`, nestedText].filter(Boolean).join('\n')
+    })
+    .join('\n')
+}
+
+function itemParagraph(item: ListItemElement) {
+  return item.children.find(
+    (child): child is ParagraphElement => child.type === 'paragraph',
+  ) ?? { type: 'paragraph', children: [{ ...emptyText }] }
+}
+
+function nestedLists(children: ListItemElement['children']) {
+  return children.filter(
+    (child): child is BulletedListElement => child.type === 'bulleted-list',
+  )
 }
 
 function deserializeInlineNodes(

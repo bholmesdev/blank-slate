@@ -116,6 +116,16 @@
   margin-block: 4px;
 }
 
+.editor li > p {
+  display: inline;
+  margin: 0;
+}
+
+.editor li > ul {
+  margin-block: 6px 0;
+  padding-inline-start: 34px;
+}
+
 .editor h1 {
   font-size: 36px;
   line-height: 1.15;

@@ -211,10 +211,7 @@ function toggleBulletedList(editor: CustomEditor) {
   Transforms.wrapNodes(editor, { type: 'list-item', children: [] })
   Transforms.wrapNodes(
     editor,
-    {
-      type: 'bulleted-list',
-      children: [],
-    },
+    bulletedList([]),
     { match: isListItemElement },
   )
 }
@@ -272,22 +269,16 @@ function splitListItem(editor: CustomEditor, itemPath: Path, offset: number) {
   if (!Element.isElement(paragraph) || paragraph.type !== 'paragraph') return
 
   const [before, after] = splitLeaves(paragraph.children, offset)
-  const childListIndexes =
-    offset === 0
-      ? item.children.reduce<number[]>((indexes, child, index) => {
-          if (isBulletedListElement(child)) indexes.push(index)
-          return indexes
-        }, [])
-      : []
+  const childIndexes = offset === 0 ? childListIndexes(item) : []
   const nextItem = emptyListItem(after)
   nextItem.children.push(
-    ...childListIndexes.map((index) => structuredClone(item.children[index] as BulletedListElement)),
+    ...childIndexes.map((index) => structuredClone(item.children[index] as BulletedListElement)),
   )
   const nextItemPath = Path.next(itemPath)
 
   Editor.withoutNormalizing(editor, () => {
     if (offset === 0) {
-      for (const index of [...childListIndexes].reverse()) {
+      for (const index of [...childIndexes].reverse()) {
         Transforms.removeNodes(editor, { at: itemPath.concat(index) })
       }
     }
@@ -315,20 +306,14 @@ function exitParentItemToParagraph(editor: CustomEditor, itemPath: Path) {
   const promotedItems = item.children
     .filter(isBulletedListElement)
     .flatMap((list) => list.children.map(cloneListItem))
-  const replacementNodes: CustomElement[] = []
   const previousItems = list.children.slice(0, itemIndex).map(cloneListItem)
   const nextItems = list.children.slice(itemIndex + 1).map(cloneListItem)
-
-  if (previousItems.length > 0) {
-    replacementNodes.push({ type: 'bulleted-list', children: previousItems })
-  }
-  replacementNodes.push(structuredClone(paragraph))
-  if (promotedItems.length > 0) {
-    replacementNodes.push({ type: 'bulleted-list', children: promotedItems })
-  }
-  if (nextItems.length > 0) {
-    replacementNodes.push({ type: 'bulleted-list', children: nextItems })
-  }
+  const replacementNodes: CustomElement[] = [
+    ...(previousItems.length > 0 ? [bulletedList(previousItems)] : []),
+    structuredClone(paragraph),
+    ...(promotedItems.length > 0 ? [bulletedList(promotedItems)] : []),
+    ...(nextItems.length > 0 ? [bulletedList(nextItems)] : []),
+  ]
 
   const paragraphPath = previousItems.length > 0 ? Path.next(listPath) : listPath
 
@@ -379,9 +364,8 @@ function getOrCreateNestedList(editor: CustomEditor, itemPath: Path) {
 
   if (existingIndex !== -1) return itemPath.concat(existingIndex)
 
-  const nestedList: BulletedListElement = { type: 'bulleted-list', children: [] }
   const nestedListPath = itemPath.concat(item.children.length)
-  Transforms.insertNodes(editor, nestedList, { at: nestedListPath })
+  Transforms.insertNodes(editor, bulletedList([]), { at: nestedListPath })
   return nestedListPath
 }
 
@@ -392,15 +376,9 @@ function removeListIfEmpty(editor: CustomEditor, listPath: Path) {
   }
 }
 
-function getChildLists(editor: CustomEditor, itemPath: Path) {
-  const item = Node.get(editor, itemPath)
-  if (!Element.isElement(item) || item.type !== 'list-item') return []
-
-  return item.children.filter(isBulletedListElement)
-}
-
 function hasChildList(editor: CustomEditor, itemPath: Path) {
-  return getChildLists(editor, itemPath).length > 0
+  const item = Node.get(editor, itemPath)
+  return Element.isElement(item) && item.type === 'list-item' && item.children.some(isBulletedListElement)
 }
 
 function itemParagraphPath(editor: CustomEditor, itemPath: Path) {
@@ -435,6 +413,10 @@ function emptyListItem(children?: CustomText[]): ListItemElement {
   return { type: 'list-item', children: [emptyParagraph(children)] }
 }
 
+function bulletedList(children: ListItemElement[]): BulletedListElement {
+  return { type: 'bulleted-list', children }
+}
+
 function appendNestedItems(item: ListItemElement, nestedItems: ListItemElement[]) {
   if (nestedItems.length === 0) return
 
@@ -444,7 +426,7 @@ function appendNestedItems(item: ListItemElement, nestedItems: ListItemElement[]
     return
   }
 
-  item.children.push({ type: 'bulleted-list', children: nestedItems })
+  item.children.push(bulletedList(nestedItems))
 }
 
 function cloneListItem(item: ListItemElement): ListItemElement {
@@ -497,6 +479,13 @@ function isBulletedListElement(node: Node): node is BulletedListElement {
 
 function isParagraphElement(node: Node): node is ParagraphElement {
   return Element.isElement(node) && node.type === 'paragraph'
+}
+
+function childListIndexes(item: ListItemElement) {
+  return item.children.reduce<number[]>((indexes, child, index) => {
+    if (isBulletedListElement(child)) indexes.push(index)
+    return indexes
+  }, [])
 }
 
 function isListItemTextEmpty(editor: CustomEditor, itemPath: Path) {

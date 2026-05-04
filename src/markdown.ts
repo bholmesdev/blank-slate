@@ -1,6 +1,11 @@
-import type { CustomText, SlateDocument } from './slate'
+import type { PhrasingContent, RootContent } from 'mdast'
+import { toString } from 'mdast-util-to-string'
+import remarkParse from 'remark-parse'
+import { unified } from 'unified'
+import type { BlockType, CustomElement, CustomText, SlateDocument } from './slate'
 
 const emptyText: CustomText = { text: '' }
+const markdownParser = unified().use(remarkParse)
 
 export const initialMarkdown = `# Slate Markdown prototype
 
@@ -9,25 +14,9 @@ Start writing here. Use **bold**, *italic*, <u>underline</u>, and \`inline code\
 Type #, ##, or ### followed by Space at the start of a block to create headings.`
 
 export function deserializeMarkdown(markdown: string): SlateDocument {
-  const blocks = markdown.trim().length > 0 ? markdown.split(/\n{2,}/) : ['']
-
-  return blocks.map((block) => {
-    const lines = block.split('\n')
-    const firstLine = lines[0] ?? ''
-    const headingMatch = /^(#{1,3})\s+(.*)$/.exec(firstLine)
-
-    if (headingMatch) {
-      return {
-        type: headingTypeForDepth(headingMatch[1].length),
-        children: parseInline(headingMatch[2]),
-      }
-    }
-
-    return {
-      type: 'paragraph',
-      children: parseInline(lines.join('\n')),
-    }
-  })
+  const tree = markdownParser.parse(markdown)
+  const blocks = tree.children.map(deserializeBlock)
+  return blocks.length > 0 ? blocks : [{ type: 'paragraph', children: [{ ...emptyText }] }]
 }
 
 export function serializeMarkdown(value: SlateDocument): string {
@@ -38,52 +27,9 @@ export function serializeMarkdown(value: SlateDocument): string {
       if (node.type === 'heading-one') return `# ${text}`
       if (node.type === 'heading-two') return `## ${text}`
       if (node.type === 'heading-three') return `### ${text}`
-      return text
+      return escapeParagraphStart(text)
     })
     .join('\n\n')
-}
-
-function parseInline(input: string): CustomText[] {
-  if (input.length === 0) return [{ ...emptyText }]
-
-  const leaves: CustomText[] = []
-  let index = 0
-
-  while (index < input.length) {
-    const code = takeDelimited(input, index, '`', '`')
-    if (code) {
-      leaves.push({ text: code.content, code: true })
-      index = code.nextIndex
-      continue
-    }
-
-    const underline = takeDelimited(input, index, '<u>', '</u>')
-    if (underline) {
-      appendMarked(leaves, parseInline(underline.content), { underline: true })
-      index = underline.nextIndex
-      continue
-    }
-
-    const bold = takeDelimited(input, index, '**', '**')
-    if (bold) {
-      appendMarked(leaves, parseInline(bold.content), { bold: true })
-      index = bold.nextIndex
-      continue
-    }
-
-    const italic = takeDelimited(input, index, '*', '*')
-    if (italic) {
-      appendMarked(leaves, parseInline(italic.content), { italic: true })
-      index = italic.nextIndex
-      continue
-    }
-
-    const nextIndex = findNextDelimiter(input, index + 1)
-    leaves.push({ text: input.slice(index, nextIndex) })
-    index = nextIndex
-  }
-
-  return mergeAdjacentLeaves(leaves)
 }
 
 function serializeText(leaf: CustomText): string {
@@ -99,32 +45,72 @@ function serializeText(leaf: CustomText): string {
   return text
 }
 
-function takeDelimited(
-  input: string,
-  index: number,
-  start: string,
-  end: string,
-) {
-  if (!input.startsWith(start, index)) return null
+function deserializeBlock(node: RootContent): CustomElement {
+  if (node.type === 'heading' && node.depth <= 3) {
+    return {
+      type: headingTypeForDepth(node.depth),
+      children: deserializeInlineNodes(node.children),
+    }
+  }
 
-  const contentStart = index + start.length
-  const contentEnd = input.indexOf(end, contentStart)
-  if (contentEnd === -1) return null
+  if (node.type === 'paragraph') {
+    return {
+      type: 'paragraph',
+      children: deserializeInlineNodes(node.children),
+    }
+  }
 
   return {
-    content: input.slice(contentStart, contentEnd),
-    nextIndex: contentEnd + end.length,
+    type: 'paragraph',
+    children: [{ text: toString(node) }],
   }
 }
 
-function appendMarked(
-  target: CustomText[],
-  leaves: CustomText[],
-  mark: Omit<CustomText, 'text'>,
+function deserializeInlineNodes(
+  nodes: readonly PhrasingContent[],
+  marks: Omit<CustomText, 'text'> = {},
 ) {
-  for (const leaf of leaves) {
-    target.push({ ...leaf, ...mark })
+  const leaves: CustomText[] = []
+  let underlineDepth = 0
+
+  for (const node of nodes) {
+    if (node.type === 'html' && isUnderlineOpenTag(node.value)) {
+      underlineDepth += 1
+      continue
+    }
+
+    if (node.type === 'html' && isUnderlineCloseTag(node.value)) {
+      underlineDepth = Math.max(0, underlineDepth - 1)
+      continue
+    }
+
+    leaves.push(
+      ...deserializeInlineNode(node, {
+        ...marks,
+        ...(underlineDepth > 0 ? { underline: true } : {}),
+      }),
+    )
   }
+
+  return mergeAdjacentLeaves(leaves.length > 0 ? leaves : [{ ...emptyText }])
+}
+
+function deserializeInlineNode(
+  node: PhrasingContent,
+  marks: Omit<CustomText, 'text'>,
+): CustomText[] {
+  if (node.type === 'text') return [{ text: node.value, ...marks }]
+  if (node.type === 'inlineCode') return [{ text: node.value, ...marks, code: true }]
+  if (node.type === 'break') return [{ text: '\n', ...marks }]
+  if (node.type === 'strong') {
+    return deserializeInlineNodes(node.children, { ...marks, bold: true })
+  }
+  if (node.type === 'emphasis') {
+    return deserializeInlineNodes(node.children, { ...marks, italic: true })
+  }
+  if (node.type === 'html') return [{ text: node.value, ...marks }]
+
+  return [{ text: toString(node), ...marks }]
 }
 
 function mergeAdjacentLeaves(leaves: CustomText[]) {
@@ -148,22 +134,27 @@ function sameMarks(a: CustomText, b: CustomText) {
   )
 }
 
-function findNextDelimiter(input: string, from: number) {
-  const delimiters = ['`', '**', '*', '<u>']
-  const next = delimiters
-    .map((delimiter) => input.indexOf(delimiter, from))
-    .filter((index) => index !== -1)
-    .sort((a, b) => a - b)[0]
-
-  return next ?? input.length
-}
-
-function headingTypeForDepth(depth: number) {
+function headingTypeForDepth(depth: number): BlockType {
   if (depth === 1) return 'heading-one'
   if (depth === 2) return 'heading-two'
   return 'heading-three'
 }
 
 function escapeMarkdownText(text: string) {
-  return text.replaceAll('\\', '\\\\').replaceAll('*', '\\*')
+  return text
+    .replaceAll('\\', '\\\\')
+    .replaceAll('*', '\\*')
+    .replaceAll('`', '\\`')
+}
+
+function escapeParagraphStart(text: string) {
+  return text.replace(/^(#{1,3})(\s)/, '\\$1$2')
+}
+
+function isUnderlineOpenTag(value: string) {
+  return /^<u\s*>$/i.test(value)
+}
+
+function isUnderlineCloseTag(value: string) {
+  return /^<\/u>$/i.test(value)
 }

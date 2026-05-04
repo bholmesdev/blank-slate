@@ -1,8 +1,14 @@
-import type { PhrasingContent, RootContent } from 'mdast'
+import type { ListItem, PhrasingContent, RootContent } from 'mdast'
 import { toString } from 'mdast-util-to-string'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
-import type { BlockType, CustomElement, CustomText, SlateDocument } from './slate'
+import type {
+  CustomElement,
+  CustomText,
+  HeadingElement,
+  ListItemElement,
+  SlateDocument,
+} from './slate'
 
 const emptyText: CustomText = { text: '' }
 const markdownParser = unified().use(remarkParse)
@@ -11,7 +17,9 @@ export const initialMarkdown = `# Slate Markdown prototype
 
 Start writing here. Use **bold**, *italic*, <u>underline</u>, and \`inline code\`.
 
-Type #, ##, or ### followed by Space at the start of a block to create headings.`
+Type #, ##, or ### followed by Space at the start of a block to create headings.
+
+- Type - or * followed by Space to start a bulleted list.`
 
 export function deserializeMarkdown(markdown: string): SlateDocument {
   const tree = markdownParser.parse(markdown)
@@ -22,6 +30,12 @@ export function deserializeMarkdown(markdown: string): SlateDocument {
 export function serializeMarkdown(value: SlateDocument): string {
   return value
     .map((node) => {
+      if (node.type === 'bulleted-list') {
+        return node.children
+          .map((item) => `- ${item.children.map(serializeText).join('')}`)
+          .join('\n')
+      }
+
       const text = node.children.map(serializeText).join('')
 
       if (node.type === 'heading-one') return `# ${text}`
@@ -60,9 +74,32 @@ function deserializeBlock(node: RootContent): CustomElement {
     }
   }
 
+  if (node.type === 'list' && !node.ordered) {
+    return {
+      type: 'bulleted-list',
+      children: node.children.map(deserializeListItem),
+    }
+  }
+
   return {
     type: 'paragraph',
     children: [{ text: toString(node) }],
+  }
+}
+
+function deserializeListItem(item: ListItem): ListItemElement {
+  const [firstBlock] = item.children
+
+  if (firstBlock?.type === 'paragraph') {
+    return {
+      type: 'list-item',
+      children: deserializeInlineNodes(firstBlock.children),
+    }
+  }
+
+  return {
+    type: 'list-item',
+    children: [{ text: firstBlock ? toString(firstBlock) : '' }],
   }
 }
 
@@ -134,7 +171,7 @@ function sameMarks(a: CustomText, b: CustomText) {
   )
 }
 
-function headingTypeForDepth(depth: number): BlockType {
+function headingTypeForDepth(depth: number): HeadingElement['type'] {
   if (depth === 1) return 'heading-one'
   if (depth === 2) return 'heading-two'
   return 'heading-three'

@@ -13,6 +13,7 @@ import {
 import './App.css'
 import {
   activeMarks,
+  handleListKeyDown,
   handleMarkdownShortcut,
   handleReturnInEmptyHeading,
   isBlockActive,
@@ -86,6 +87,7 @@ function App() {
               spellCheck
               onKeyDown={(event) => {
                 if (handleMarkdownShortcut(editor, event)) return
+                if (handleListKeyDown(editor, event)) return
                 if (handleReturnInEmptyHeading(editor, event)) return
 
                 if (!event.metaKey && !event.ctrlKey) return
@@ -128,6 +130,7 @@ function Toolbar() {
       <BlockButton blockType="heading-one" label="H1" title="Heading 1" />
       <BlockButton blockType="heading-two" label="H2" title="Heading 2" />
       <BlockButton blockType="heading-three" label="H3" title="Heading 3" />
+      <BlockButton blockType="bulleted-list" label="Bullet" title="Bulleted list" />
       <span className="toolbar-divider" />
       <MarkButton mark="bold" label="B" title="Bold" />
       <MarkButton mark="italic" label="I" title="Italic" />
@@ -207,6 +210,10 @@ function StatusBar() {
 
 function Element({ attributes, children, element }: ElementProps) {
   switch (element.type) {
+    case 'bulleted-list':
+      return <ul {...attributes}>{children}</ul>
+    case 'list-item':
+      return <li {...attributes}>{children}</li>
     case 'heading-one':
       return <h1 {...attributes}>{children}</h1>
     case 'heading-two':

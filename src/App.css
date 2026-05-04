@@ -102,8 +102,18 @@
 .editor h1,
 .editor h2,
 .editor h3,
-.editor p {
+.editor p,
+.editor ul {
   margin-block: 0 18px;
+}
+
+.editor ul {
+  padding-inline-start: 28px;
+}
+
+.editor li {
+  padding-inline-start: 4px;
+  margin-block: 4px;
 }
 
 .editor h1 {

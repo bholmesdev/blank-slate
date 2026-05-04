@@ -2,7 +2,12 @@ import type { BaseEditor } from 'slate'
 import type { HistoryEditor } from 'slate-history'
 import type { ReactEditor } from 'slate-react'
 
-export type BlockType = 'paragraph' | 'heading-one' | 'heading-two' | 'heading-three'
+export type BlockType =
+  | 'paragraph'
+  | 'heading-one'
+  | 'heading-two'
+  | 'heading-three'
+  | 'bulleted-list'
 
 export type ParagraphElement = {
   type: 'paragraph'
@@ -14,7 +19,21 @@ export type HeadingElement = {
   children: CustomText[]
 }
 
-export type CustomElement = ParagraphElement | HeadingElement
+export type BulletedListElement = {
+  type: 'bulleted-list'
+  children: ListItemElement[]
+}
+
+export type ListItemElement = {
+  type: 'list-item'
+  children: CustomText[]
+}
+
+export type CustomElement =
+  | ParagraphElement
+  | HeadingElement
+  | BulletedListElement
+  | ListItemElement
 
 export type CustomText = {
   text: string

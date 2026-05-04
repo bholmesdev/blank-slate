@@ -206,6 +206,33 @@ test('Enter in the middle of a list item preserves text on both sides before typ
   await expect(markdownOutput(page)).resolves.toBe('- example\n- prompt')
 })
 
+test('Enter on an empty top-level list item exits the list', async ({ page }) => {
+  await typeMarkdownListItem(page, '')
+  await page.keyboard.press('Enter')
+
+  await expect(editorTree(page)).resolves.toEqual([{ tag: 'p', text: '', children: [] }])
+  await expect(markdownOutput(page)).resolves.toBe('')
+})
+
+test('Enter on an empty nested list item lifts it to the parent level', async ({ page }) => {
+  await typeMarkdownListItem(page, 'alpha')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('!')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: 'alpha', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: '!', children: [] }] },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- alpha\n- !')
+})
+
 test('Backspace at the start of a nested item lifts it to the parent level', async ({ page }) => {
   await typeNestedList(page)
   await setCaretAtListItemTextStart(page, 'beta')
@@ -271,7 +298,7 @@ test('Enter at the start of a nested item creates an empty nested sibling before
   await expect(markdownOutput(page)).resolves.toBe('- alpha\n  - \n  - beta')
 })
 
-test('Enter at the start of a nested item preserves cursor position in the new item', async ({
+test('Enter at the start of a nested item preserves cursor position in the original item', async ({
   page,
 }) => {
   await typeNestedList(page)
@@ -290,8 +317,8 @@ test('Enter at the start of a nested item preserves cursor position in the new i
             {
               tag: 'ul',
               children: [
-                { tag: 'li', children: [{ tag: 'p', text: '!', children: [] }] },
-                { tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] },
+                { tag: 'li', children: [{ tag: 'p', text: '', children: [] }] },
+                { tag: 'li', children: [{ tag: 'p', text: '!beta', children: [] }] },
               ],
             },
           ],
@@ -299,7 +326,7 @@ test('Enter at the start of a nested item preserves cursor position in the new i
       ],
     },
   ])
-  await expect(markdownOutput(page)).resolves.toBe('- alpha\n  - !\n  - beta')
+  await expect(markdownOutput(page)).resolves.toBe('- alpha\n  - \n  - !beta')
 })
 
 test('Delete at the start of a nested item lifts it and preserves cursor position', async ({
@@ -339,21 +366,21 @@ test('Shift+Tab on a nested item lifts it and preserves cursor position', async 
   await expect(markdownOutput(page)).resolves.toBe('- alpha\n- beta!')
 })
 
-test('Backspace at the start of a parent item promotes its nested children', async ({ page }) => {
+test('Backspace at the start of a parent item exits it to a paragraph and promotes children', async ({ page }) => {
   await typeNestedList(page)
   await setCaretAtListItemTextStart(page, 'alpha')
   await page.keyboard.press('Backspace')
 
   await expect(editorTree(page)).resolves.toEqual([
+    { tag: 'p', text: 'alpha', children: [] },
     {
       tag: 'ul',
       children: [
-        { tag: 'li', children: [{ tag: 'p', text: 'alpha', children: [] }] },
         { tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] },
       ],
     },
   ])
-  await expect(markdownOutput(page)).resolves.toBe('- alpha\n- beta')
+  await expect(markdownOutput(page)).resolves.toBe('alpha\n\n- beta')
 })
 
 test('Delete at the start of a parent item exits it to a paragraph and promotes children', async ({
@@ -373,6 +400,43 @@ test('Delete at the start of a parent item exits it to a paragraph and promotes 
     },
   ])
   await expect(markdownOutput(page)).resolves.toBe('alpha\n\n- beta')
+})
+
+test('Delete at the start of a parent item preserves previous sibling order', async ({
+  page,
+}) => {
+  await typeThreeItemList(page, ['Type - or * followed by Space to start a bulleted list.', 'One', 'Two'])
+  await setCaretAtListItemTextStart(page, 'Two')
+  await page.keyboard.press('Tab')
+  await setCaretAtListItemTextStart(page, 'One')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('!')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        {
+          tag: 'li',
+          children: [
+            {
+              tag: 'p',
+              text: 'Type - or * followed by Space to start a bulleted list.',
+              children: [],
+            },
+          ],
+        },
+      ],
+    },
+    { tag: 'p', text: '!One', children: [] },
+    {
+      tag: 'ul',
+      children: [{ tag: 'li', children: [{ tag: 'p', text: 'Two', children: [] }] }],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe(
+    '- Type - or \\* followed by Space to start a bulleted list.\n\n!One\n\n- Two',
+  )
 })
 
 test('Enter at the start of a parent item creates an empty sibling before it', async ({
@@ -401,6 +465,68 @@ test('Enter at the start of a parent item creates an empty sibling before it', a
     },
   ])
   await expect(markdownOutput(page)).resolves.toBe('- \n- alpha\n  - beta')
+})
+
+test('Enter at the start of a parent item preserves cursor position in the original item', async ({
+  page,
+}) => {
+  await typeNestedList(page)
+  await setCaretAtListItemTextStart(page, 'alpha')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('!')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: '', children: [] }] },
+        {
+          tag: 'li',
+          children: [
+            { tag: 'p', text: '!alpha', children: [] },
+            {
+              tag: 'ul',
+              children: [{ tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] }],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- \n- !alpha\n  - beta')
+})
+
+test('Delete at the start of a nested item lifts following siblings under the lifted item', async ({
+  page,
+}) => {
+  await typeThreeItemList(page, ['Parent', 'One', 'Two'])
+  await setCaretAtListItemTextStart(page, 'One')
+  await page.keyboard.press('Tab')
+  await setCaretAtListItemTextStart(page, 'Two')
+  await page.keyboard.press('Tab')
+  await setCaretAtListItemTextStart(page, 'One')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('!')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: 'Parent', children: [] }] },
+        {
+          tag: 'li',
+          children: [
+            { tag: 'p', text: '!One', children: [] },
+            {
+              tag: 'ul',
+              children: [{ tag: 'li', children: [{ tag: 'p', text: 'Two', children: [] }] }],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- Parent\n- !One\n  - Two')
 })
 
 test('toolbar Bullet toggles a paragraph into and out of a list', async ({ page }) => {
@@ -442,6 +568,14 @@ async function typeTwoItemList(page: Page) {
   await typeMarkdownListItem(page, 'alpha')
   await page.keyboard.press('Enter')
   await page.keyboard.type('beta')
+}
+
+async function typeThreeItemList(page: Page, items: [string, string, string]) {
+  await typeMarkdownListItem(page, items[0])
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(items[1])
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(items[2])
 }
 
 async function typeNestedList(page: Page) {

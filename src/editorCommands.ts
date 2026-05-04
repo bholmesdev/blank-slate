@@ -34,14 +34,14 @@ export function setBlockType(editor: CustomEditor, blockType: BlockType) {
     return
   }
 
-  if (getCurrentListItem(editor)) {
+  if (currentListItem(editor)) {
     liftListItemToParagraph(editor)
   }
 
   Transforms.setNodes(
     editor,
     { type: blockType },
-    { match: (node) => isEditableTextBlock(editor, node) },
+    { match: (node) => isTextBlock(editor, node) },
   )
 }
 
@@ -65,24 +65,14 @@ export function handleMarkdownShortcut(editor: CustomEditor, event: KeyboardEven
   const blockStart = Editor.start(editor, blockPath)
   const beforeRange = Editor.range(editor, blockStart, anchor)
   const beforeText = Editor.string(editor, beforeRange)
-  const listType = listTypeFromMarkdownToken(beforeText)
+  const blockType = blockTypeFromMarkdownToken(beforeText)
 
-  if (listType) {
-    event.preventDefault()
-    Transforms.select(editor, beforeRange)
-    Transforms.delete(editor)
-    toggleBulletedList(editor)
-    return true
-  }
-
-  const heading = headingTypeFromMarkdownToken(beforeText)
-
-  if (!heading) return false
+  if (!blockType) return false
 
   event.preventDefault()
   Transforms.select(editor, beforeRange)
   Transforms.delete(editor)
-  setBlockType(editor, heading)
+  setBlockType(editor, blockType)
   return true
 }
 
@@ -108,7 +98,7 @@ export function handleReturnInEmptyHeading(editor: CustomEditor, event: Keyboard
 export function handleListKeyDown(editor: CustomEditor, event: KeyboardEvent) {
   if (!editor.selection || !Range.isCollapsed(editor.selection)) return false
 
-  const listItemEntry = getCurrentListItem(editor)
+  const listItemEntry = currentListItem(editor)
   if (!listItemEntry) return false
 
   const [, listItemPath] = listItemEntry
@@ -140,14 +130,10 @@ export function activeMarks(editor: CustomEditor) {
   return inlineMarks.filter((mark) => isMarkActive(editor, mark))
 }
 
-function headingTypeFromMarkdownToken(token: string): BlockType | null {
+function blockTypeFromMarkdownToken(token: string): BlockType | null {
   if (token === '#') return 'heading-one'
   if (token === '##') return 'heading-two'
   if (token === '###') return 'heading-three'
-  return null
-}
-
-function listTypeFromMarkdownToken(token: string): BlockType | null {
   if (token === '-' || token === '*') return 'bulleted-list'
   return null
 }
@@ -165,7 +151,7 @@ function toggleBulletedList(editor: CustomEditor) {
   Transforms.setNodes(
     editor,
     { type: 'list-item' } as Partial<CustomElement>,
-    { match: (node) => isEditableTextBlock(editor, node) },
+    { match: (node) => isTextBlock(editor, node) },
   )
   Transforms.wrapNodes(editor, { type: 'bulleted-list', children: [] })
 }
@@ -182,7 +168,7 @@ function liftListItemToParagraph(editor: CustomEditor) {
   )
 }
 
-function getCurrentListItem(editor: CustomEditor) {
+function currentListItem(editor: CustomEditor) {
   const entry = Editor.above(editor, { match: isListItemElement })
   if (!entry || !Element.isElement(entry[0]) || entry[0].type !== 'list-item') {
     return null
@@ -191,7 +177,7 @@ function getCurrentListItem(editor: CustomEditor) {
   return entry
 }
 
-function isEditableTextBlock(editor: CustomEditor, node: Node) {
+function isTextBlock(editor: CustomEditor, node: Node) {
   return (
     Element.isElement(node) &&
     Editor.isBlock(editor, node) &&

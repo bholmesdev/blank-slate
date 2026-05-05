@@ -18,8 +18,10 @@ import {
   handleReturnInEmptyHeading,
   isBlockActive,
   isMarkActive,
+  normalizeAdjacentLists,
   toggleBlock,
   toggleMark,
+  withListNormalization,
   type MarkType,
 } from './editorCommands'
 import {
@@ -34,10 +36,9 @@ const storageKey = 'blank-slate.markdown'
 function App() {
   const [editorVersion, setEditorVersion] = useState(0)
   const [editor, setEditor] = useState(createSlateEditor)
-  const [markdown, setMarkdown] = useState(() => {
-    return window.localStorage.getItem(storageKey) ?? initialMarkdown
-  })
-  const [value, setValue] = useState<SlateDocument>(() => deserializeMarkdown(markdown))
+  const [initialDocument] = useState(readInitialDocument)
+  const [markdown, setMarkdown] = useState(initialDocument.markdown)
+  const [value, setValue] = useState<SlateDocument>(initialDocument.value)
 
   const renderElement = useCallback((props: RenderElementProps) => <Element {...props} />, [])
   const renderLeaf = useCallback((props: RenderLeafProps) => <Leaf {...props} />, [])
@@ -54,9 +55,11 @@ function App() {
             className="secondary-button"
             type="button"
             onClick={() => {
-              setMarkdown(initialMarkdown)
-              setValue(deserializeMarkdown(initialMarkdown))
-              window.localStorage.setItem(storageKey, initialMarkdown)
+              const resetDocument = parseMarkdown(initialMarkdown)
+
+              setMarkdown(resetDocument.markdown)
+              setValue(resetDocument.value)
+              window.localStorage.setItem(storageKey, resetDocument.markdown)
               setEditor(createSlateEditor())
               setEditorVersion((version) => version + 1)
             }}
@@ -70,6 +73,11 @@ function App() {
           editor={editor}
           initialValue={value}
           onChange={(nextValue) => {
+            // Avoid rewriting stored Markdown during mount, focus, or other selection-only changes.
+            if (!editor.operations.some((operation) => operation.type !== 'set_selection')) {
+              return
+            }
+
             const slateValue = nextValue as SlateDocument
             const nextMarkdown = serializeMarkdown(slateValue)
             setValue(slateValue)
@@ -248,7 +256,17 @@ type LeafProps = Omit<RenderLeafProps, 'leaf'> & {
 }
 
 function createSlateEditor() {
-  return withHistory(withReact(createEditor()))
+  return withListNormalization(withHistory(withReact(createEditor())))
+}
+
+function readInitialDocument() {
+  const storedMarkdown = window.localStorage.getItem(storageKey) ?? initialMarkdown
+  return parseMarkdown(storedMarkdown)
+}
+
+function parseMarkdown(markdown: string) {
+  const value = normalizeAdjacentLists(deserializeMarkdown(markdown))
+  return { markdown: serializeMarkdown(value), value }
 }
 
 export default App

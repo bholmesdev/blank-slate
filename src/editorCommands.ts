@@ -9,6 +9,7 @@ import type {
   CustomText,
   ListItemElement,
   ParagraphElement,
+  SlateDocument,
 } from './slate'
 
 export type MarkType = Exclude<keyof CustomText, 'text'>
@@ -164,6 +165,78 @@ export function handleListKeyDown(editor: CustomEditor, event: KeyboardEvent) {
 
 export function activeMarks(editor: CustomEditor) {
   return inlineMarks.filter((mark) => isMarkActive(editor, mark))
+}
+
+export function normalizeAdjacentLists(value: SlateDocument): SlateDocument {
+  return joinAdjacentLists(value.map(normalizeElementLists))
+}
+
+export function withListNormalization(editor: CustomEditor) {
+  const { normalizeNode } = editor
+
+  editor.normalizeNode = (entry) => {
+    const [node, path] = entry
+
+    if (hasChildNodes(node)) {
+      const index = adjacentListIndex(node.children)
+
+      if (index !== -1) {
+        Transforms.mergeNodes(editor, { at: path.concat(index + 1) })
+        return
+      }
+    }
+
+    normalizeNode(entry)
+  }
+
+  return editor
+}
+
+function normalizeElementLists(element: CustomElement): CustomElement {
+  const normalized = structuredClone(element) as CustomElement
+
+  if (isBulletedListElement(normalized)) {
+    normalized.children = normalized.children.map((item) => {
+      return normalizeElementLists(item) as ListItemElement
+    })
+  }
+
+  if (isListItemElement(normalized)) {
+    normalized.children = joinAdjacentLists(
+      normalized.children.map((child) => {
+        return normalizeElementLists(child) as ParagraphElement | BulletedListElement
+      }),
+    )
+  }
+
+  return normalized
+}
+
+function joinAdjacentLists<T extends CustomElement>(children: T[]) {
+  const joined: T[] = []
+
+  for (const child of children) {
+    const previous = joined.at(-1)
+
+    if (previous && isBulletedListElement(previous) && isBulletedListElement(child)) {
+      previous.children.push(...child.children)
+      continue
+    }
+
+    joined.push(child)
+  }
+
+  return joined
+}
+
+function adjacentListIndex(children: readonly Node[]) {
+  for (let index = 0; index < children.length - 1; index += 1) {
+    if (isBulletedListElement(children[index]) && isBulletedListElement(children[index + 1])) {
+      return index
+    }
+  }
+
+  return -1
 }
 
 function blockTypeFromMarkdownToken(token: string): BlockType | null {
@@ -479,6 +552,10 @@ function isBulletedListElement(node: Node): node is BulletedListElement {
 
 function isParagraphElement(node: Node): node is ParagraphElement {
   return Element.isElement(node) && node.type === 'paragraph'
+}
+
+function hasChildNodes(node: Node): node is Node & { children: Node[] } {
+  return 'children' in node && Array.isArray(node.children)
 }
 
 function childListIndexes(item: ListItemElement) {

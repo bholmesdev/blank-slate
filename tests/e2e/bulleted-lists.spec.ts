@@ -550,6 +550,61 @@ test('toolbar Bullet toggles a paragraph into and out of a list', async ({ page 
   await expect(markdownOutput(page)).resolves.toBe('alpha')
 })
 
+test('adjacent bulleted list chunks are normalized into one list', async ({ page }) => {
+  await typeThreeItemList(page, ['One', 'Two', 'Three'])
+  await setCaretAtListItemTextStart(page, 'Two')
+  await page.keyboard.press('Backspace')
+  await page.getByRole('button', { name: 'Bullet' }).click()
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: 'One', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: 'Two', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: 'Three', children: [] }] },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- One\n- Two\n- Three')
+})
+
+test('loaded adjacent markdown list chunks are normalized into one list', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('blank-slate.markdown', '- First\n- Second\n\n- First')
+  })
+  await page.reload()
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: 'First', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: 'Second', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: 'First', children: [] }] },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- First\n- Second\n- First')
+})
+
+test('opening unsupported markdown does not rewrite storage before editing', async ({ page }) => {
+  const source = '[link](https://example.com)'
+
+  await page.addInitScript((markdown) => {
+    window.localStorage.setItem('blank-slate.markdown', markdown)
+  }, source)
+  await page.reload()
+
+  await expect(storedMarkdown(page)).resolves.toBe(source)
+
+  await page.locator('.editor').click()
+  await expect(storedMarkdown(page)).resolves.toBe(source)
+
+  await page.keyboard.type('!')
+  await expect(storedMarkdown(page)).resolves.toBe('link!')
+})
+
 async function clearEditor(page: Page) {
   await page.locator('.editor').click()
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
@@ -585,6 +640,10 @@ async function typeNestedList(page: Page) {
 
 function markdownOutput(page: Page) {
   return page.locator('.markdown-panel pre').innerText()
+}
+
+function storedMarkdown(page: Page) {
+  return page.evaluate(() => window.localStorage.getItem('blank-slate.markdown'))
 }
 
 function editorTree(page: Page) {

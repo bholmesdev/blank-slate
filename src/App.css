@@ -103,11 +103,13 @@
 .editor h2,
 .editor h3,
 .editor p,
-.editor ul {
+.editor ul,
+.editor ol {
   margin-block: 0 18px;
 }
 
-.editor ul {
+.editor ul,
+.editor ol {
   padding-inline-start: 28px;
 }
 
@@ -116,14 +118,58 @@
   margin-block: 4px;
 }
 
-.editor li > p {
+.editor li > p,
+.editor li > div > p {
   display: inline;
   margin: 0;
 }
 
-.editor li > ul {
+.editor li > ul,
+.editor li > ol,
+.editor li > div > ul,
+.editor li > div > ol {
   margin-block: 6px 0;
   padding-inline-start: 34px;
+}
+
+.editor ul[data-type='taskList'] {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.editor li[data-type='taskItem'] {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-inline-start: 0;
+}
+
+.editor li[data-type='taskItem'] > label {
+  display: inline-flex;
+  align-items: center;
+  height: 31px;
+}
+
+.editor li[data-type='taskItem'] > div {
+  min-width: 0;
+}
+
+.task-checkbox {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.task-checkbox[aria-pressed='true'] {
+  border-color: var(--accent);
+  background:
+    linear-gradient(135deg, transparent 58%, var(--surface) 58% 70%, transparent 70%),
+    linear-gradient(45deg, transparent 44%, var(--surface) 44% 56%, transparent 56%),
+    var(--accent);
 }
 
 .editor h1 {

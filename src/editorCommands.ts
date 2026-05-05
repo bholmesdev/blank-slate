@@ -3,18 +3,21 @@ import type { KeyboardEvent } from 'react'
 import { ReactEditor } from 'slate-react'
 import type {
   BlockType,
-  BulletedListElement,
   CustomEditor,
   CustomElement,
   CustomText,
+  ListElement,
   ListItemElement,
   ParagraphElement,
   SlateDocument,
 } from './slate'
 
 export type MarkType = Exclude<keyof CustomText, 'text'>
+type ListType = ListElement['type']
+type Shortcut = { blockType: BlockType; checked?: boolean }
 
 const inlineMarks: MarkType[] = ['bold', 'italic', 'underline', 'code']
+const listTypes = new Set<ListType>(['bulleted-list', 'numbered-list', 'task-list'])
 
 export function isMarkActive(editor: CustomEditor, mark: MarkType) {
   const marks = Editor.marks(editor)
@@ -39,8 +42,8 @@ export function isBlockActive(editor: CustomEditor, blockType: BlockType) {
 }
 
 export function setBlockType(editor: CustomEditor, blockType: BlockType) {
-  if (blockType === 'bulleted-list') {
-    toggleBulletedList(editor)
+  if (isListType(blockType)) {
+    toggleList(editor, blockType)
     return
   }
 
@@ -75,14 +78,22 @@ export function handleMarkdownShortcut(editor: CustomEditor, event: KeyboardEven
   const blockStart = Editor.start(editor, blockPath)
   const beforeRange = Editor.range(editor, blockStart, anchor)
   const beforeText = Editor.string(editor, beforeRange)
-  const blockType = blockTypeFromMarkdownToken(beforeText)
+  const shortcut = blockTypeFromMarkdownToken(beforeText)
 
-  if (!blockType) return false
+  if (!shortcut) return false
 
   event.preventDefault()
   Transforms.select(editor, beforeRange)
   Transforms.delete(editor)
-  setBlockType(editor, blockType)
+  if (isListType(shortcut.blockType)) {
+    if (shortcut.blockType === 'task-list' && currentListItem(editor)) {
+      convertCurrentListToTask(editor, shortcut.checked)
+    } else {
+      toggleList(editor, shortcut.blockType, shortcut.checked)
+    }
+  } else {
+    setBlockType(editor, shortcut.blockType)
+  }
   return true
 }
 
@@ -195,7 +206,7 @@ export function withListNormalization(editor: CustomEditor) {
 function normalizeElementLists(element: CustomElement): CustomElement {
   const normalized = structuredClone(element) as CustomElement
 
-  if (isBulletedListElement(normalized)) {
+  if (isListElement(normalized)) {
     normalized.children = normalized.children.map((item) => {
       return normalizeElementLists(item) as ListItemElement
     })
@@ -204,7 +215,7 @@ function normalizeElementLists(element: CustomElement): CustomElement {
   if (isListItemElement(normalized)) {
     normalized.children = joinAdjacentLists(
       normalized.children.map((child) => {
-        return normalizeElementLists(child) as ParagraphElement | BulletedListElement
+        return normalizeElementLists(child) as ParagraphElement | ListElement
       }),
     )
   }
@@ -218,7 +229,7 @@ function joinAdjacentLists<T extends CustomElement>(children: T[]) {
   for (const child of children) {
     const previous = joined.at(-1)
 
-    if (previous && isBulletedListElement(previous) && isBulletedListElement(child)) {
+    if (previous && isListElement(previous) && isListElement(child) && previous.type === child.type) {
       previous.children.push(...child.children)
       continue
     }
@@ -231,7 +242,10 @@ function joinAdjacentLists<T extends CustomElement>(children: T[]) {
 
 function adjacentListIndex(children: readonly Node[]) {
   for (let index = 0; index < children.length - 1; index += 1) {
-    if (isBulletedListElement(children[index]) && isBulletedListElement(children[index + 1])) {
+    const child = children[index]
+    const nextChild = children[index + 1]
+
+    if (isListElement(child) && isListElement(nextChild) && child.type === nextChild.type) {
       return index
     }
   }
@@ -239,11 +253,18 @@ function adjacentListIndex(children: readonly Node[]) {
   return -1
 }
 
-function blockTypeFromMarkdownToken(token: string): BlockType | null {
-  if (token === '#') return 'heading-one'
-  if (token === '##') return 'heading-two'
-  if (token === '###') return 'heading-three'
-  if (token === '-' || token === '*') return 'bulleted-list'
+function blockTypeFromMarkdownToken(token: string): Shortcut | null {
+  if (token === '#') return { blockType: 'heading-one' }
+  if (token === '##') return { blockType: 'heading-two' }
+  if (token === '###') return { blockType: 'heading-three' }
+  if (token === '-' || token === '*') return { blockType: 'bulleted-list' }
+  if (/^\d+\.$/.test(token)) return { blockType: 'numbered-list' }
+
+  const taskMatch = token.match(/^-?\[( |x|X)?\]$/)
+  if (taskMatch) {
+    return { blockType: 'task-list', checked: taskMatch[1]?.toLowerCase() === 'x' }
+  }
+
   return null
 }
 
@@ -267,8 +288,8 @@ function syncDomSelection(editor: CustomEditor) {
   return slateRange ?? editor.selection
 }
 
-function toggleBulletedList(editor: CustomEditor) {
-  if (isBlockActive(editor, 'bulleted-list')) {
+function toggleList(editor: CustomEditor, listType: ListType, checked = false) {
+  if (isBlockActive(editor, listType)) {
     const listItemEntry = currentListItem(editor)
     if (listItemEntry) {
       liftListItem(editor, listItemEntry[1])
@@ -284,9 +305,29 @@ function toggleBulletedList(editor: CustomEditor) {
   Transforms.wrapNodes(editor, { type: 'list-item', children: [] })
   Transforms.wrapNodes(
     editor,
-    bulletedList([]),
+    listElement(listType, []),
     { match: isListItemElement },
   )
+
+  if (listType === 'task-list') {
+    const listItemEntry = currentListItem(editor)
+    if (listItemEntry) {
+      Transforms.setNodes(editor, { checked }, { at: listItemEntry[1] })
+    }
+  }
+}
+
+function convertCurrentListToTask(editor: CustomEditor, checked = false) {
+  const listItemEntry = currentListItem(editor)
+  if (!listItemEntry) return
+
+  const [, itemPath] = listItemEntry
+  const listPath = Path.parent(itemPath)
+  const list = Node.get(editor, listPath)
+  if (!isListElement(list)) return
+
+  Transforms.setNodes(editor, { type: 'task-list' }, { at: listPath })
+  Transforms.setNodes(editor, { checked }, { at: itemPath })
 }
 
 function liftListItem(editor: CustomEditor, itemPath: Path, offset = 0) {
@@ -302,10 +343,10 @@ function liftListItem(editor: CustomEditor, itemPath: Path, offset = 0) {
     const parentItemPath = Path.parent(listPath)
     const liftedItem = structuredClone(item) as ListItemElement
     const list = Node.get(editor, listPath)
-    if (!Element.isElement(list) || list.type !== 'bulleted-list') return
+    if (!isListElement(list)) return
 
     const followingItems = list.children.slice(itemIndex + 1).map(cloneListItem)
-    appendNestedItems(liftedItem, followingItems)
+    appendNestedItems(liftedItem, list.type, followingItems)
 
     const nextItemPath = Path.next(parentItemPath)
 
@@ -325,7 +366,7 @@ function liftListItem(editor: CustomEditor, itemPath: Path, offset = 0) {
 
 function liftListItemToParagraph(editor: CustomEditor) {
   Transforms.unwrapNodes(editor, {
-    match: (node) => Element.isElement(node) && node.type === 'bulleted-list',
+    match: isListElement,
     split: true,
   })
   Transforms.unwrapNodes(editor, { match: isListItemElement, split: true })
@@ -345,7 +386,7 @@ function splitListItem(editor: CustomEditor, itemPath: Path, offset: number) {
   const childIndexes = offset === 0 ? childListIndexes(item) : []
   const nextItem = emptyListItem(after)
   nextItem.children.push(
-    ...childIndexes.map((index) => structuredClone(item.children[index] as BulletedListElement)),
+    ...childIndexes.map((index) => structuredClone(item.children[index] as ListElement)),
   )
   const nextItemPath = Path.next(itemPath)
 
@@ -371,21 +412,21 @@ function exitParentItemToParagraph(editor: CustomEditor, itemPath: Path) {
 
   const listPath = Path.parent(itemPath)
   const list = Node.get(editor, listPath)
-  if (!Element.isElement(list) || list.type !== 'bulleted-list') return
+  if (!isListElement(list)) return
 
   const paragraph = item.children.find(isParagraphElement)
   if (!paragraph) return
 
   const promotedItems = item.children
-    .filter(isBulletedListElement)
-    .flatMap((list) => list.children.map(cloneListItem))
+    .filter(isListElement)
+    .map((childList) => listElement(childList.type, childList.children.map(cloneListItem)))
   const previousItems = list.children.slice(0, itemIndex).map(cloneListItem)
   const nextItems = list.children.slice(itemIndex + 1).map(cloneListItem)
   const replacementNodes: CustomElement[] = [
-    ...(previousItems.length > 0 ? [bulletedList(previousItems)] : []),
+    ...(previousItems.length > 0 ? [listElement(list.type, previousItems)] : []),
     structuredClone(paragraph),
-    ...(promotedItems.length > 0 ? [bulletedList(promotedItems)] : []),
-    ...(nextItems.length > 0 ? [bulletedList(nextItems)] : []),
+    ...promotedItems,
+    ...(nextItems.length > 0 ? [listElement(list.type, nextItems)] : []),
   ]
 
   const paragraphPath = previousItems.length > 0 ? Path.next(listPath) : listPath
@@ -398,7 +439,9 @@ function exitParentItemToParagraph(editor: CustomEditor, itemPath: Path) {
 }
 
 function indentListItem(editor: CustomEditor, itemPath: Path) {
-  if (itemPath.at(-1) === 0) return false
+  const itemIndex = itemPath.at(-1)
+  if (itemIndex === undefined) return false
+  if (itemIndex === 0) return indentFirstListItem(editor, itemPath)
 
   let indented = false
 
@@ -411,7 +454,7 @@ function indentListItem(editor: CustomEditor, itemPath: Path) {
 
     const nestedListPath = getOrCreateNestedList(editor, previousItemPath)
     const nestedList = Node.get(editor, nestedListPath)
-    if (!Element.isElement(nestedList) || nestedList.type !== 'bulleted-list') {
+    if (!isListElement(nestedList)) {
       return
     }
 
@@ -425,33 +468,91 @@ function indentListItem(editor: CustomEditor, itemPath: Path) {
   return indented
 }
 
-function getOrCreateNestedList(editor: CustomEditor, itemPath: Path) {
+function indentFirstListItem(editor: CustomEditor, itemPath: Path) {
+  // First items have no sibling inside their own list to indent under, so
+  // look for an adjacent list before the parent (say, a bulleted list before a numbered list)
+  // and use the adjacent list's final item as the nesting parent.
+  const listPath = Path.parent(itemPath)
+  const listIndex = listPath.at(-1)
+  if (listIndex === undefined || listIndex === 0) return false
+
+  const list = Node.get(editor, listPath)
+  if (!isListElement(list)) return false
+
+  const previousListPath = Path.previous(listPath)
+  const previousList = Node.get(editor, previousListPath)
+  if (!isListElement(previousList) || previousList.children.length === 0) return false
+
+  const previousItemPath = previousListPath.concat(previousList.children.length - 1)
+  const previousItem = Node.get(editor, previousItemPath)
+  if (!Element.isElement(previousItem) || previousItem.type !== 'list-item') return false
+
+  const nestedListIndex = previousItem.children.findIndex(
+    (child) => isListElement(child) && child.type === list.type,
+  )
+  const offset = editor.selection?.anchor.offset ?? 0
+
+  if (nestedListIndex === -1) {
+    // Preserve the source list type by creating a nested list of that type, and
+    // move only the first item so any remaining source siblings stay top-level.
+    const targetPath = previousItemPath.concat(previousItem.children.length)
+    Editor.withoutNormalizing(editor, () => {
+      Transforms.insertNodes(editor, listElement(list.type, [cloneListItem(list.children[0])]), {
+        at: targetPath,
+      })
+      Transforms.removeNodes(editor, { at: itemPath })
+      removeListIfEmpty(editor, listPath)
+      selectListItemText(editor, targetPath.concat(0), offset)
+    })
+    return true
+  }
+
+  const nestedListPath = previousItemPath.concat(nestedListIndex)
+  const nestedList = Node.get(editor, nestedListPath)
+  if (!isListElement(nestedList)) return false
+
+  // Reuse an existing nested list when it has the same type as the source list.
+  const targetPath = nestedListPath.concat(nestedList.children.length)
+  Editor.withoutNormalizing(editor, () => {
+    Transforms.insertNodes(editor, cloneListItem(list.children[0]), { at: targetPath })
+    Transforms.removeNodes(editor, { at: itemPath })
+    removeListIfEmpty(editor, listPath)
+    selectListItemText(editor, targetPath, offset)
+  })
+  return true
+}
+
+function getOrCreateNestedList(
+  editor: CustomEditor,
+  itemPath: Path,
+  listType = parentListTypeForItem(editor, itemPath),
+) {
   const item = Node.get(editor, itemPath)
   if (!Element.isElement(item) || item.type !== 'list-item') {
     throw new Error('Expected list item')
   }
 
   const existingIndex = item.children.findIndex(
-    (child) => Element.isElement(child) && child.type === 'bulleted-list',
+    (child) => isListElement(child) && child.type === listType,
   )
 
   if (existingIndex !== -1) return itemPath.concat(existingIndex)
 
   const nestedListPath = itemPath.concat(item.children.length)
-  Transforms.insertNodes(editor, bulletedList([]), { at: nestedListPath })
+  Transforms.insertNodes(editor, listElement(listType, []), { at: nestedListPath })
   return nestedListPath
 }
 
 function removeListIfEmpty(editor: CustomEditor, listPath: Path) {
   const list = Node.get(editor, listPath)
-  if (Element.isElement(list) && list.type === 'bulleted-list' && list.children.length === 0) {
+  if (isListElement(list) && list.children.length === 0) {
     Transforms.removeNodes(editor, { at: listPath })
   }
 }
 
 function hasChildList(editor: CustomEditor, itemPath: Path) {
   const item = Node.get(editor, itemPath)
-  return Element.isElement(item) && item.type === 'list-item' && item.children.some(isBulletedListElement)
+  return Element.isElement(item) && item.type === 'list-item' && item.children.some(isListElement)
 }
 
 function itemParagraphPath(editor: CustomEditor, itemPath: Path) {
@@ -486,20 +587,22 @@ function emptyListItem(children?: CustomText[]): ListItemElement {
   return { type: 'list-item', children: [emptyParagraph(children)] }
 }
 
-function bulletedList(children: ListItemElement[]): BulletedListElement {
-  return { type: 'bulleted-list', children }
+function listElement(type: ListType, children: ListItemElement[]): ListElement {
+  return { type, children }
 }
 
-function appendNestedItems(item: ListItemElement, nestedItems: ListItemElement[]) {
+function appendNestedItems(item: ListItemElement, listType: ListType, nestedItems: ListItemElement[]) {
   if (nestedItems.length === 0) return
 
-  const nestedList = item.children.find(isBulletedListElement)
+  const nestedList = item.children.find(
+    (child): child is ListElement => isListElement(child) && child.type === listType,
+  )
   if (nestedList) {
     nestedList.children.push(...nestedItems)
     return
   }
 
-  item.children.push(bulletedList(nestedItems))
+  item.children.push(listElement(listType, nestedItems))
 }
 
 function cloneListItem(item: ListItemElement): ListItemElement {
@@ -537,7 +640,7 @@ function isTextBlock(editor: CustomEditor, node: Node) {
   return (
     Element.isElement(node) &&
     Editor.isBlock(editor, node) &&
-    node.type !== 'bulleted-list' &&
+    !isListElement(node) &&
     node.type !== 'list-item'
   )
 }
@@ -546,8 +649,8 @@ function isListItemElement(node: Node) {
   return Element.isElement(node) && node.type === 'list-item'
 }
 
-function isBulletedListElement(node: Node): node is BulletedListElement {
-  return Element.isElement(node) && node.type === 'bulleted-list'
+function isListElement(node: Node): node is ListElement {
+  return Element.isElement(node) && isListType(node.type)
 }
 
 function isParagraphElement(node: Node): node is ParagraphElement {
@@ -560,9 +663,19 @@ function hasChildNodes(node: Node): node is Node & { children: Node[] } {
 
 function childListIndexes(item: ListItemElement) {
   return item.children.reduce<number[]>((indexes, child, index) => {
-    if (isBulletedListElement(child)) indexes.push(index)
+    if (isListElement(child)) indexes.push(index)
     return indexes
   }, [])
+}
+
+function isListType(type: string): type is ListType {
+  return listTypes.has(type as ListType)
+}
+
+function parentListTypeForItem(editor: CustomEditor, itemPath: Path): ListType {
+  const list = Node.get(editor, Path.parent(itemPath))
+  if (!isListElement(list)) return 'bulleted-list'
+  return list.type
 }
 
 function isListItemTextEmpty(editor: CustomEditor, itemPath: Path) {

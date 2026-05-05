@@ -8,6 +8,8 @@ export type BlockType =
   | 'heading-two'
   | 'heading-three'
   | 'bulleted-list'
+  | 'numbered-list'
+  | 'task-list'
 
 export type ParagraphElement = {
   type: 'paragraph'
@@ -19,20 +21,21 @@ export type HeadingElement = {
   children: CustomText[]
 }
 
-export type BulletedListElement = {
-  type: 'bulleted-list'
+export type ListElement = {
+  type: 'bulleted-list' | 'numbered-list' | 'task-list'
   children: ListItemElement[]
 }
 
 export type ListItemElement = {
   type: 'list-item'
-  children: Array<ParagraphElement | BulletedListElement>
+  checked?: boolean
+  children: Array<ParagraphElement | ListElement>
 }
 
 export type CustomElement =
   | ParagraphElement
   | HeadingElement
-  | BulletedListElement
+  | ListElement
   | ListItemElement
 
 export type CustomText = {

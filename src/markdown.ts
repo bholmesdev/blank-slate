@@ -1,12 +1,12 @@
-import type { ListItem, PhrasingContent, RootContent } from 'mdast'
+import type { List, ListItem, PhrasingContent, RootContent } from 'mdast'
 import { toString } from 'mdast-util-to-string'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import type {
-  BulletedListElement,
   CustomElement,
   CustomText,
   HeadingElement,
+  ListElement,
   ListItemElement,
   ParagraphElement,
   SlateDocument,
@@ -21,7 +21,9 @@ Start writing here. Use **bold**, *italic*, <u>underline</u>, and \`inline code\
 
 Type #, ##, or ### followed by Space at the start of a block to create headings.
 
-- Type - or * followed by Space to start a bulleted list.`
+- Type - or * followed by Space to start a bulleted list.
+- Type 1. followed by Space to start a numbered list.
+- Type -[] or -[x] followed by Space to start a task list.`
 
 export function deserializeMarkdown(markdown: string): SlateDocument {
   const tree = markdownParser.parse(markdown)
@@ -32,8 +34,8 @@ export function deserializeMarkdown(markdown: string): SlateDocument {
 export function serializeMarkdown(value: SlateDocument): string {
   return value
     .map((node) => {
-      if (node.type === 'bulleted-list') {
-        return serializeList(node.children)
+      if (isListElement(node)) {
+        return serializeList(node)
       }
 
       if (node.type === 'heading-one') return `# ${node.children.map(serializeText).join('')}`
@@ -75,9 +77,9 @@ function deserializeBlock(node: RootContent): CustomElement {
     }
   }
 
-  if (node.type === 'list' && !node.ordered) {
+  if (node.type === 'list') {
     return {
-      type: 'bulleted-list',
+      type: listTypeForMarkdownList(node),
       children: node.children.map(deserializeListItem),
     }
   }
@@ -90,39 +92,46 @@ function deserializeBlock(node: RootContent): CustomElement {
 
 function deserializeListItem(item: ListItem): ListItemElement {
   const [firstBlock] = item.children
+  const taskState = taskStateForListItem(item)
+  const paragraphChildren =
+    firstBlock?.type === 'paragraph'
+      ? stripTaskMarker(deserializeInlineNodes(firstBlock.children), taskState !== null)
+      : [{ text: firstBlock ? toString(firstBlock) : '' }]
   const children: ListItemElement['children'] = [
     {
       type: 'paragraph',
-      children:
-        firstBlock?.type === 'paragraph'
-          ? deserializeInlineNodes(firstBlock.children)
-          : [{ text: firstBlock ? toString(firstBlock) : '' }],
+      children: paragraphChildren,
     },
   ]
 
   for (const block of item.children.slice(1)) {
-    if (block.type === 'list' && !block.ordered) {
+    if (block.type === 'list') {
       children.push({
-        type: 'bulleted-list',
+        type: listTypeForMarkdownList(block),
         children: block.children.map(deserializeListItem),
       })
     }
   }
 
-  return { type: 'list-item', children }
+  return {
+    type: 'list-item',
+    checked: taskState ?? undefined,
+    children,
+  }
 }
 
-function serializeList(items: readonly ListItemElement[], depth = 0): string {
+function serializeList(list: ListElement, depth = 0): string {
   const indent = '  '.repeat(depth)
 
-  return items
-    .map((item) => {
+  return list.children
+    .map((item, index) => {
       const text = itemParagraph(item).children.map(serializeText).join('')
       const nestedText = nestedLists(item.children)
-        .map((list) => serializeList(list.children, depth + 1))
+        .map((list) => serializeList(list, depth + 1))
         .join('\n')
+      const marker = listMarker(list.type, item, index)
 
-      return [`${indent}- ${text}`, nestedText].filter(Boolean).join('\n')
+      return [`${indent}${marker} ${text}`, nestedText].filter(Boolean).join('\n')
     })
     .join('\n')
 }
@@ -134,9 +143,7 @@ function itemParagraph(item: ListItemElement) {
 }
 
 function nestedLists(children: ListItemElement['children']) {
-  return children.filter(
-    (child): child is BulletedListElement => child.type === 'bulleted-list',
-  )
+  return children.filter(isListElement)
 }
 
 function deserializeInlineNodes(
@@ -221,7 +228,10 @@ function escapeMarkdownText(text: string) {
 }
 
 function escapeParagraphStart(text: string) {
-  return text.replace(/^(#{1,3})(\s)/, '\\$1$2')
+  return text
+    .replace(/^(#{1,3})(\s)/, '\\$1$2')
+    .replace(/^((?:[-*])|\d+\.)(\s)/, '\\$1$2')
+    .replace(/^(-\[(?: |x|X)?\])(\s)/, '\\$1$2')
 }
 
 function isUnderlineOpenTag(value: string) {
@@ -230,4 +240,47 @@ function isUnderlineOpenTag(value: string) {
 
 function isUnderlineCloseTag(value: string) {
   return /^<\/u>$/i.test(value)
+}
+
+function listTypeForMarkdownList(node: List): ListElement['type'] {
+  if (node.ordered) return 'numbered-list'
+  if (node.children.some((item) => taskStateForListItem(item) !== null)) return 'task-list'
+  return 'bulleted-list'
+}
+
+function listMarker(type: ListElement['type'], item: ListItemElement, index: number) {
+  if (type === 'numbered-list') return `${index + 1}.`
+  if (type === 'task-list') return `- [${item.checked ? 'x' : ' '}]`
+  return '-'
+}
+
+function isListElement(node: CustomElement): node is ListElement
+function isListElement(node: ListItemElement['children'][number]): node is ListElement
+function isListElement(node: CustomElement | ListItemElement['children'][number]): node is ListElement {
+  return (
+    node.type === 'bulleted-list' ||
+    node.type === 'numbered-list' ||
+    node.type === 'task-list'
+  )
+}
+
+function taskStateForListItem(item: ListItem) {
+  if (typeof item.checked === 'boolean') return item.checked
+
+  const [firstBlock] = item.children
+  if (firstBlock?.type !== 'paragraph') return null
+
+  const text = toString(firstBlock)
+  const match = text.match(/^\[( |x|X)?\]\s+/)
+  if (!match) return null
+  return match[1]?.toLowerCase() === 'x'
+}
+
+function stripTaskMarker(children: CustomText[], shouldStrip: boolean) {
+  if (!shouldStrip) return children
+
+  const [first, ...rest] = children
+  if (!first) return [{ ...emptyText }]
+
+  return [{ ...first, text: first.text.replace(/^\[(?: |x|X)?\]\s+/, '') }, ...rest]
 }

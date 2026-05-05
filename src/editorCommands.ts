@@ -363,7 +363,9 @@ function exitParentItemToParagraph(editor: CustomEditor, itemPath: Path) {
 }
 
 function indentListItem(editor: CustomEditor, itemPath: Path) {
-  if (itemPath.at(-1) === 0) return false
+  const itemIndex = itemPath.at(-1)
+  if (itemIndex === undefined) return false
+  if (itemIndex === 0) return indentFirstListItem(editor, itemPath)
 
   let indented = false
 
@@ -390,21 +392,78 @@ function indentListItem(editor: CustomEditor, itemPath: Path) {
   return indented
 }
 
-function getOrCreateNestedList(editor: CustomEditor, itemPath: Path) {
+function indentFirstListItem(editor: CustomEditor, itemPath: Path) {
+  // First items have no sibling inside their own list to indent under, so
+  // look for an adjacent list before the parent (say, a bulleted list before a numbered list)
+  // and use the adjacent list's final item as the nesting parent.
+  const listPath = Path.parent(itemPath)
+  const listIndex = listPath.at(-1)
+  if (listIndex === undefined || listIndex === 0) return false
+
+  const list = Node.get(editor, listPath)
+  if (!isListElement(list)) return false
+
+  const previousListPath = Path.previous(listPath)
+  const previousList = Node.get(editor, previousListPath)
+  if (!isListElement(previousList) || previousList.children.length === 0) return false
+
+  const previousItemPath = previousListPath.concat(previousList.children.length - 1)
+  const previousItem = Node.get(editor, previousItemPath)
+  if (!Element.isElement(previousItem) || previousItem.type !== 'list-item') return false
+
+  const nestedListIndex = previousItem.children.findIndex(
+    (child) => isListElement(child) && child.type === list.type,
+  )
+  const offset = editor.selection?.anchor.offset ?? 0
+
+  if (nestedListIndex === -1) {
+    // Preserve the source list type by creating a nested list of that type, and
+    // move only the first item so any remaining source siblings stay top-level.
+    const targetPath = previousItemPath.concat(previousItem.children.length)
+    Editor.withoutNormalizing(editor, () => {
+      Transforms.insertNodes(editor, listElement(list.type, [cloneListItem(list.children[0])]), {
+        at: targetPath,
+      })
+      Transforms.removeNodes(editor, { at: itemPath })
+      removeListIfEmpty(editor, listPath)
+      selectListItemText(editor, targetPath.concat(0), offset)
+    })
+    return true
+  }
+
+  const nestedListPath = previousItemPath.concat(nestedListIndex)
+  const nestedList = Node.get(editor, nestedListPath)
+  if (!isListElement(nestedList)) return false
+
+  // Reuse an existing nested list when it has the same type as the source list.
+  const targetPath = nestedListPath.concat(nestedList.children.length)
+  Editor.withoutNormalizing(editor, () => {
+    Transforms.insertNodes(editor, cloneListItem(list.children[0]), { at: targetPath })
+    Transforms.removeNodes(editor, { at: itemPath })
+    removeListIfEmpty(editor, listPath)
+    selectListItemText(editor, targetPath, offset)
+  })
+  return true
+}
+
+function getOrCreateNestedList(
+  editor: CustomEditor,
+  itemPath: Path,
+  listType = parentListTypeForItem(editor, itemPath),
+) {
   const item = Node.get(editor, itemPath)
   if (!Element.isElement(item) || item.type !== 'list-item') {
     throw new Error('Expected list item')
   }
 
-  const parentListType = parentListTypeForItem(editor, itemPath)
   const existingIndex = item.children.findIndex(
-    (child) => isListElement(child) && child.type === parentListType,
+    (child) => isListElement(child) && child.type === listType,
   )
 
   if (existingIndex !== -1) return itemPath.concat(existingIndex)
 
   const nestedListPath = itemPath.concat(item.children.length)
-  Transforms.insertNodes(editor, listElement(parentListType, []), { at: nestedListPath })
+  Transforms.insertNodes(editor, listElement(listType, []), { at: nestedListPath })
   return nestedListPath
 }
 

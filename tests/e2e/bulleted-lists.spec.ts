@@ -9,6 +9,10 @@ type EditorNode = {
   children: EditorNode[]
 }
 
+type ListKind = 'bulleted' | 'numbered' | 'task'
+
+const listKinds: ListKind[] = ['bulleted', 'numbered', 'task']
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('blank-slate.markdown', '')
@@ -339,6 +343,55 @@ test('mixed nested list parents preserve their own markdown markers', async ({ p
   await expect(markdownOutput(page)).resolves.toBe(
     '- alpha\n  1. beta\n  2. gamma\n- delta\n  - [x] task',
   )
+})
+
+for (const parentKind of listKinds) {
+  for (const childKind of listKinds) {
+    test(`Tab nests first ${childKind} list item under previous ${parentKind} list`, async ({
+      page,
+    }) => {
+      await typeAdjacentLists(page, parentKind, childKind)
+      await setCaretAtListItemTextEnd(page, 'Child')
+      await page.keyboard.press('Tab')
+
+      await expect(editorTree(page)).resolves.toEqual([
+        listNode(parentKind, [
+          listItemNode(parentKind, [
+            { tag: 'p', text: 'Parent', children: [] },
+            listNode(childKind, [
+              listItemNode(childKind, [{ tag: 'p', text: 'Child', children: [] }]),
+            ]),
+          ]),
+        ]),
+      ])
+      await expect(markdownOutput(page)).resolves.toBe(
+        `${markdownListLine(parentKind, 'Parent')}\n  ${markdownListLine(childKind, 'Child')}`,
+      )
+    })
+  }
+}
+
+test('Tab nests the first item of a following list and preserves its siblings', async ({
+  page,
+}) => {
+  await loadMarkdown(page, '1. Parent\n\n- Child\n- Sibling')
+  await setCaretAtListItemTextEnd(page, 'Child')
+  await page.keyboard.press('Tab')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    listNode('numbered', [
+      listItemNode('numbered', [
+        { tag: 'p', text: 'Parent', children: [] },
+        listNode('bulleted', [
+          listItemNode('bulleted', [{ tag: 'p', text: 'Child', children: [] }]),
+        ]),
+      ]),
+    ]),
+    listNode('bulleted', [
+      listItemNode('bulleted', [{ tag: 'p', text: 'Sibling', children: [] }]),
+    ]),
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('1. Parent\n  - Child\n\n- Sibling')
 })
 
 test('Shift+Tab on a top-level item leaves it top-level', async ({ page }) => {
@@ -799,6 +852,15 @@ async function typeNestedList(page: Page, marker = '-') {
   await page.keyboard.press('Tab')
 }
 
+async function typeAdjacentLists(page: Page, parentKind: ListKind, childKind: ListKind) {
+  await typeMarkdownListItem(page, 'Parent', markdownShortcut(parentKind))
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(markdownShortcut(childKind))
+  await page.keyboard.press('Space')
+  await page.keyboard.type('Child')
+}
+
 async function loadMarkdown(page: Page, markdown: string) {
   await page.addInitScript((value) => {
     window.localStorage.setItem('blank-slate.markdown', value)
@@ -808,6 +870,36 @@ async function loadMarkdown(page: Page, markdown: string) {
 
 function markdownOutput(page: Page) {
   return page.locator('.markdown-panel pre').innerText()
+}
+
+function markdownListLine(kind: ListKind, text: string) {
+  if (kind === 'numbered') return `1. ${text}`
+  if (kind === 'task') return `- [ ] ${text}`
+  return `- ${text}`
+}
+
+function markdownShortcut(kind: ListKind) {
+  if (kind === 'numbered') return '1.'
+  if (kind === 'task') return '-[]'
+  return '-'
+}
+
+function listNode(kind: ListKind, children: EditorNode[]): EditorNode {
+  return {
+    tag: kind === 'numbered' ? 'ol' : 'ul',
+    ...(kind === 'task' ? { dataType: 'taskList' } : {}),
+    children,
+  }
+}
+
+function listItemNode(kind: ListKind, children: EditorNode[]): EditorNode {
+  return {
+    tag: 'li',
+    ...(kind === 'task'
+      ? { dataType: 'taskItem', checked: 'false', hasButton: true }
+      : {}),
+    children,
+  }
 }
 
 function editorTree(page: Page) {

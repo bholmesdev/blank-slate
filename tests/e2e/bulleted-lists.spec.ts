@@ -3,6 +3,9 @@ import { expect, test, type Page } from '@playwright/test'
 type EditorNode = {
   tag: string
   text?: string
+  dataType?: string
+  checked?: string
+  hasButton?: boolean
   children: EditorNode[]
 }
 
@@ -24,6 +27,95 @@ test('markdown shortcut creates a bulleted list item', async ({ page }) => {
     },
   ])
   await expect(markdownOutput(page)).resolves.toBe('- alpha')
+})
+
+test('markdown shortcut creates a numbered list item', async ({ page }) => {
+  await typeMarkdownListItem(page, 'alpha', '1.')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ol',
+      children: [{ tag: 'li', children: [{ tag: 'p', text: 'alpha', children: [] }] }],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('1. alpha')
+})
+
+test('markdown shortcut creates an unchecked task list item', async ({ page }) => {
+  await typeMarkdownListItem(page, 'alpha', '-[]')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      dataType: 'taskList',
+      children: [
+        {
+          tag: 'li',
+          dataType: 'taskItem',
+          checked: 'false',
+          hasButton: true,
+          children: [{ tag: 'p', text: 'alpha', children: [] }],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- [ ] alpha')
+})
+
+test('markdown shortcut creates a checked task list item', async ({ page }) => {
+  await typeMarkdownListItem(page, 'alpha', '-[x]')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      dataType: 'taskList',
+      children: [
+        {
+          tag: 'li',
+          dataType: 'taskItem',
+          checked: 'true',
+          hasButton: true,
+          children: [{ tag: 'p', text: 'alpha', children: [] }],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- [x] alpha')
+})
+
+test('standard markdown task shorthand converts a bullet into a task item', async ({ page }) => {
+  await typeMarkdownListItem(page, '', '-')
+  await page.keyboard.type('[x]')
+  await page.keyboard.press('Space')
+  await page.keyboard.type('alpha')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      dataType: 'taskList',
+      children: [
+        {
+          tag: 'li',
+          dataType: 'taskItem',
+          checked: 'true',
+          hasButton: true,
+          children: [{ tag: 'p', text: 'alpha', children: [] }],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- [x] alpha')
+})
+
+test('task item button checks and unchecks an item', async ({ page }) => {
+  await typeMarkdownListItem(page, 'alpha', '-[]')
+
+  const checkbox = page.locator('li[data-type="taskItem"] button').first()
+  await checkbox.click()
+  await expect(markdownOutput(page)).resolves.toBe('- [x] alpha')
+
+  await checkbox.click()
+  await expect(markdownOutput(page)).resolves.toBe('- [ ] alpha')
 })
 
 test('Enter at the end of a list item creates a sibling item', async ({ page }) => {
@@ -96,6 +188,67 @@ test('Tab nests a list item under its previous sibling', async ({ page }) => {
   await expect(markdownOutput(page)).resolves.toBe('- alpha\n  - beta')
 })
 
+test('Tab nests a numbered list item under its previous sibling', async ({ page }) => {
+  await typeTwoItemList(page, '1.')
+  await page.keyboard.press('Tab')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ol',
+      children: [
+        {
+          tag: 'li',
+          children: [
+            { tag: 'p', text: 'alpha', children: [] },
+            {
+              tag: 'ol',
+              children: [{ tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] }],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('1. alpha\n  1. beta')
+})
+
+test('Tab nests a task list item under its previous sibling', async ({ page }) => {
+  await typeTwoItemList(page, '-[x]')
+  await page.keyboard.press('Tab')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      dataType: 'taskList',
+      children: [
+        {
+          tag: 'li',
+          dataType: 'taskItem',
+          checked: 'true',
+          hasButton: true,
+          children: [
+            { tag: 'p', text: 'alpha', children: [] },
+            {
+              tag: 'ul',
+              dataType: 'taskList',
+              children: [
+                {
+                  tag: 'li',
+                  dataType: 'taskItem',
+                  checked: 'false',
+                  hasButton: true,
+                  children: [{ tag: 'p', text: 'beta', children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('- [x] alpha\n  - [ ] beta')
+})
+
 test('Tab on the first list item leaves it top-level', async ({ page }) => {
   await typeMarkdownListItem(page, 'alpha')
   await page.keyboard.press('Tab')
@@ -123,6 +276,69 @@ test('Shift+Tab lifts a nested item to the parent level', async ({ page }) => {
     },
   ])
   await expect(markdownOutput(page)).resolves.toBe('- alpha\n- beta')
+})
+
+test('Shift+Tab lifts a nested numbered item to the parent level', async ({ page }) => {
+  await typeNestedList(page, '1.')
+  await page.keyboard.press('Shift+Tab')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ol',
+      children: [
+        { tag: 'li', children: [{ tag: 'p', text: 'alpha', children: [] }] },
+        { tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe('1. alpha\n2. beta')
+})
+
+test('mixed nested list parents preserve their own markdown markers', async ({ page }) => {
+  await loadMarkdown(page, '- alpha\n  1. beta\n  2. gamma\n- delta\n  - [x] task')
+
+  await expect(editorTree(page)).resolves.toEqual([
+    {
+      tag: 'ul',
+      children: [
+        {
+          tag: 'li',
+          children: [
+            { tag: 'p', text: 'alpha', children: [] },
+            {
+              tag: 'ol',
+              children: [
+                { tag: 'li', children: [{ tag: 'p', text: 'beta', children: [] }] },
+                { tag: 'li', children: [{ tag: 'p', text: 'gamma', children: [] }] },
+              ],
+            },
+          ],
+        },
+        {
+          tag: 'li',
+          children: [
+            { tag: 'p', text: 'delta', children: [] },
+            {
+              tag: 'ul',
+              dataType: 'taskList',
+              children: [
+                {
+                  tag: 'li',
+                  dataType: 'taskItem',
+                  checked: 'true',
+                  hasButton: true,
+                  children: [{ tag: 'p', text: 'task', children: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  await expect(markdownOutput(page)).resolves.toBe(
+    '- alpha\n  1. beta\n  2. gamma\n- delta\n  - [x] task',
+  )
 })
 
 test('Shift+Tab on a top-level item leaves it top-level', async ({ page }) => {
@@ -557,15 +773,15 @@ async function clearEditor(page: Page) {
   await expect(editorTree(page)).resolves.toEqual([{ tag: 'p', text: '', children: [] }])
 }
 
-async function typeMarkdownListItem(page: Page, text: string) {
+async function typeMarkdownListItem(page: Page, text: string, marker = '-') {
   await page.locator('.editor').click()
-  await page.keyboard.type('-')
+  await page.keyboard.type(marker)
   await page.keyboard.press('Space')
   await page.keyboard.type(text)
 }
 
-async function typeTwoItemList(page: Page) {
-  await typeMarkdownListItem(page, 'alpha')
+async function typeTwoItemList(page: Page, marker = '-') {
+  await typeMarkdownListItem(page, 'alpha', marker)
   await page.keyboard.press('Enter')
   await page.keyboard.type('beta')
 }
@@ -578,9 +794,16 @@ async function typeThreeItemList(page: Page, items: [string, string, string]) {
   await page.keyboard.type(items[2])
 }
 
-async function typeNestedList(page: Page) {
-  await typeTwoItemList(page)
+async function typeNestedList(page: Page, marker = '-') {
+  await typeTwoItemList(page, marker)
   await page.keyboard.press('Tab')
+}
+
+async function loadMarkdown(page: Page, markdown: string) {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem('blank-slate.markdown', value)
+  }, markdown)
+  await page.reload()
 }
 
 function markdownOutput(page: Page) {
@@ -589,13 +812,14 @@ function markdownOutput(page: Page) {
 
 function editorTree(page: Page) {
   return page.locator('.editor').evaluate((editor) => {
-    function serializeElement(element: Element): EditorNode | null {
+    function serializeElement(element: Element): EditorNode[] {
       const tag = element.tagName.toLowerCase()
-      if (!['p', 'ul', 'li'].includes(tag)) return null
+      if (!['p', 'ul', 'ol', 'li'].includes(tag)) {
+        return Array.from(element.children).flatMap(serializeElement)
+      }
 
       const children = Array.from(element.children)
-        .map(serializeElement)
-        .filter((child): child is EditorNode => child !== null)
+        .flatMap(serializeElement)
 
       const node: EditorNode = { tag, children }
       if (tag === 'p') {
@@ -603,12 +827,16 @@ function editorTree(page: Page) {
           .map((leaf) => leaf.textContent ?? '')
           .join('')
       }
-      return node
+      if (element instanceof HTMLElement) {
+        const dataType = element.dataset.type
+        if (dataType) node.dataType = dataType
+        if (element.dataset.checked) node.checked = element.dataset.checked
+        if (element.querySelector(':scope > label > button')) node.hasButton = true
+      }
+      return [node]
     }
 
-    return Array.from(editor.children)
-      .map(serializeElement)
-      .filter((child): child is EditorNode => child !== null)
+    return Array.from(editor.children).flatMap(serializeElement)
   })
 }
 

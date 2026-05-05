@@ -1,11 +1,13 @@
 import { useCallback, useState } from 'react'
 import type { HTMLAttributes, ReactNode } from 'react'
-import { createEditor } from 'slate'
+import { createEditor, Element as SlateElement, Node, Path, Transforms } from 'slate'
 import { withHistory } from 'slate-history'
 import {
   Editable,
+  ReactEditor,
   Slate,
   useSlate,
+  useSlateStatic,
   withReact,
   type RenderElementProps,
   type RenderLeafProps,
@@ -27,7 +29,14 @@ import {
   initialMarkdown,
   serializeMarkdown,
 } from './markdown'
-import type { BlockType, CustomElement, CustomText, SlateDocument } from './slate'
+import type {
+  BlockType,
+  CustomEditor,
+  CustomElement,
+  CustomText,
+  ListItemElement,
+  SlateDocument,
+} from './slate'
 
 const storageKey = 'blank-slate.markdown'
 
@@ -131,6 +140,8 @@ function Toolbar() {
       <BlockButton blockType="heading-two" label="H2" title="Heading 2" />
       <BlockButton blockType="heading-three" label="H3" title="Heading 3" />
       <BlockButton blockType="bulleted-list" label="Bullet" title="Bulleted list" />
+      <BlockButton blockType="numbered-list" label="Numbered" title="Numbered list" />
+      <BlockButton blockType="task-list" label="Task" title="Task list" />
       <span className="toolbar-divider" />
       <MarkButton mark="bold" label="B" title="Bold" />
       <MarkButton mark="italic" label="I" title="Italic" />
@@ -212,8 +223,20 @@ function Element({ attributes, children, element }: ElementProps) {
   switch (element.type) {
     case 'bulleted-list':
       return <ul {...attributes}>{children}</ul>
+    case 'numbered-list':
+      return <ol {...attributes}>{children}</ol>
+    case 'task-list':
+      return (
+        <ul {...attributes} data-type="taskList">
+          {children}
+        </ul>
+      )
     case 'list-item':
-      return <li {...attributes}>{children}</li>
+      return (
+        <ListItem attributes={attributes} element={element}>
+          {children}
+        </ListItem>
+      )
     case 'heading-one':
       return <h1 {...attributes}>{children}</h1>
     case 'heading-two':
@@ -223,6 +246,37 @@ function Element({ attributes, children, element }: ElementProps) {
     default:
       return <p {...attributes}>{children}</p>
   }
+}
+
+function ListItem({ attributes, children, element }: ListItemProps) {
+  const editor = useSlateStatic()
+  const isTaskItem = isTaskListItem(editor, element)
+
+  if (!isTaskItem) {
+    return <li {...attributes}>{children}</li>
+  }
+
+  const checked = element.checked === true
+
+  return (
+    <li {...attributes} data-checked={checked} data-type="taskItem">
+      <label contentEditable={false}>
+        <button
+          aria-label={checked ? 'Mark task incomplete' : 'Mark task complete'}
+          aria-pressed={checked}
+          className="task-checkbox"
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            const path = ReactEditor.findPath(editor, element)
+            Transforms.setNodes(editor, { checked: !checked }, { at: path })
+          }}
+        />
+        <span />
+      </label>
+      <div>{children}</div>
+    </li>
+  )
 }
 
 function Leaf({ attributes, children, leaf }: LeafProps) {
@@ -245,6 +299,21 @@ type LeafProps = Omit<RenderLeafProps, 'leaf'> & {
   attributes: HTMLAttributes<HTMLSpanElement>
   children: ReactNode
   leaf: CustomText
+}
+
+type ListItemProps = {
+  attributes: HTMLAttributes<HTMLElement>
+  children: ReactNode
+  element: ListItemElement
+}
+
+function isTaskListItem(editor: CustomEditor, item: ListItemElement) {
+  const itemPath = ReactEditor.findPath(editor, item)
+  const listPath = Path.parent(itemPath)
+  if (!Node.has(editor, listPath)) return false
+
+  const list = Node.get(editor, listPath)
+  return SlateElement.isElement(list) && list.type === 'task-list'
 }
 
 function createSlateEditor() {
